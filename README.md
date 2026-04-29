@@ -51,7 +51,7 @@ Expertise is stored in skills rather than split into many narrow agent personas.
 3. Read [docs/capability-contract.md](docs/capability-contract.md).
 4. Review [docs/dataset-shortlist.md](docs/dataset-shortlist.md) and [docs/baseline-shortlist.md](docs/baseline-shortlist.md).
 5. Start with [experiments/pilot.md](experiments/pilot.md).
-6. Run `python -m federated_tabpfn show-config`, `python -m federated_tabpfn check-ready`, `python -m federated_tabpfn worker preflight`, or `python -m federated_tabpfn worker run-pilot`.
+6. Run `python -m federated_tabpfn show-config`, `python -m federated_tabpfn check-ready`, `python -m federated_tabpfn worker preflight`, `python -m federated_tabpfn worker run-pilot`, `python -m federated_tabpfn worker run-dataset-baseline`, or `python -m federated_tabpfn render-dashboard`.
 
 ## Worker Status Surface
 
@@ -59,6 +59,7 @@ Workers now publish machine-readable status for Pengu under:
 
 - `reports/generated/execution-status.json`
 - `reports/generated/execution-status.md`
+- `reports/generated/dashboard.html`
 
 The first concrete worker execution step is `python -m federated_tabpfn worker preflight`, which:
 
@@ -73,6 +74,15 @@ The first local Flower execution step is `python -m federated_tabpfn worker run-
 - runs a local Flower smoke simulation
 - saves a pilot artifact in `results/<run-name>/pilot-summary.json`
 - publishes a worker update that Pengu can report back
+
+The first dataset-backed benchmark step is `python -m federated_tabpfn worker run-dataset-baseline`, which:
+
+- loads the Adult dataset
+- runs a federated logistic regression baseline under Flower
+- saves a summary artifact in `results/<run-name>/dataset-baseline-summary.json`
+- updates worker status and the dashboard for Pengu to report
+
+The interactive tracking UI is `reports/generated/dashboard.html`, which is regenerated when worker commands update project state.
 
 ## Current Status
 

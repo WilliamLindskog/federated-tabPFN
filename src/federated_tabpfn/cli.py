@@ -5,6 +5,8 @@ from pathlib import Path
 import typer
 import yaml
 
+from .dashboard import write_dashboard
+from .dataset_pilot import run_dataset_backed_logreg
 from .directions import consume_latest_direction
 from .preflight import write_preflight_artifacts
 from .pilot import run_flower_smoke_pilot
@@ -69,6 +71,13 @@ def show_status(as_json: bool = typer.Option(False, "--json", help="Print JSON s
     typer.echo(f"Next step: {status['next_step']}")
 
 
+@app.command("render-dashboard")
+def render_dashboard() -> None:
+    """Generate the interactive experiment tracking dashboard."""
+    output_path = write_dashboard()
+    typer.echo(str(output_path.resolve()))
+
+
 @worker_app.command("update")
 def worker_update(
     worker: str,
@@ -120,6 +129,7 @@ def worker_preflight(
         phase="preflight-complete",
         overall_status="ready-for-pilot" if ready else "blocked-on-config",
     )
+    write_dashboard()
     typer.echo(str(artifact_path.resolve()))
 
 
@@ -151,6 +161,7 @@ def worker_run_pilot(
             phase="pilot-failed",
             overall_status="pilot-failed",
         )
+        write_dashboard()
         raise typer.Exit(code=1) from exc
 
     update_worker_status(
@@ -162,6 +173,41 @@ def worker_run_pilot(
         phase="pilot-smoke-complete",
         overall_status="pilot-smoke-complete",
     )
+    write_dashboard()
+    typer.echo(str(artifact_path.resolve()))
+
+
+@worker_app.command("run-dataset-baseline")
+def worker_run_dataset_baseline(
+    worker: str = typer.Option("experiment-builder", help="Worker publishing the execution step."),
+    run_name: str = typer.Option("adult-logreg", help="Run directory name under results/."),
+) -> None:
+    """Run the first real dataset-backed federated baseline slice."""
+    config = _load_pilot_config()
+    try:
+        artifact_path = run_dataset_backed_logreg(config, run_name)
+    except Exception as exc:
+        update_worker_status(
+            worker,
+            worker_status="failed",
+            summary=f"Dataset-backed baseline failed: {exc}",
+            next_step="Fix the dataset or baseline execution issue, then rerun the dataset-backed worker command.",
+            phase="dataset-baseline-failed",
+            overall_status="dataset-baseline-failed",
+        )
+        write_dashboard()
+        raise typer.Exit(code=1) from exc
+
+    update_worker_status(
+        worker,
+        worker_status="completed",
+        summary="Completed the first dataset-backed federated baseline run on Adult with logistic regression.",
+        next_step="Review runtime and metrics, then decide whether to expand to another baseline or dataset.",
+        artifact=str(artifact_path.relative_to(default_paths().root)),
+        phase="dataset-baseline-complete",
+        overall_status="dataset-baseline-complete",
+    )
+    write_dashboard()
     typer.echo(str(artifact_path.resolve()))
 
 
@@ -179,6 +225,7 @@ def worker_consume_directions(
             next_step="Wait for a new /project direct instruction or continue the current execution plan.",
             phase="direction-idle",
         )
+        write_dashboard()
         typer.echo("No new directions available.")
         return
 
@@ -191,4 +238,5 @@ def worker_consume_directions(
         artifact=str(artifact_path.relative_to(default_paths().root)),
         phase="direction-consumed",
     )
+    write_dashboard()
     typer.echo(str(artifact_path.resolve()))

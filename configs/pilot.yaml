@@ -11,10 +11,12 @@ baselines:
   - mlp
   - tabpfn
 pilot:
+  selected_dataset: adult
   selected_baseline: logistic_regression
   num_clients: 2
   num_rounds: 1
   smoke_test: true
+  dataset_backed_max_rows: 2000
 metrics:
   - accuracy
   - roc_auc
