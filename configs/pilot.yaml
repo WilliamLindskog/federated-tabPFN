@@ -1,0 +1,24 @@
+name: federated-tabpfn-pilot
+objective: benchmark federated TabPFN against comparable tabular models
+framework: flower
+execution_mode: local
+datasets:
+  - adult
+  - bank_marketing
+baselines:
+  - logistic_regression
+  - random_forest
+  - mlp
+  - tabpfn
+pilot:
+  selected_baseline: logistic_regression
+  num_clients: 2
+  num_rounds: 1
+  smoke_test: true
+metrics:
+  - accuracy
+  - roc_auc
+  - runtime_seconds
+notes:
+  - First Flower execution is a smoke test for orchestration and artifact generation.
+  - Replace the synthetic pilot implementation with dataset-backed training before comparing results.
