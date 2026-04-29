@@ -8,6 +8,7 @@ Initial comparable models for the pilot benchmark.
 - realistic local-machine runtime
 - defensible as strong baselines
 - enough variety to reveal a real model-family story
+- baseline preprocessing should follow each model family's best-practice path, not a forced single pipeline
 
 ## Candidate Baselines
 
@@ -22,10 +23,16 @@ Initial comparable models for the pilot benchmark.
 - strong classical ensemble baseline
 - robust comparison point for tabular data
 
-### XGBoost-style Gradient Boosting
+### XGBoost
 
-- likely one of the strongest classical baselines
-- important if the study claims modern models outperform established tabular methods
+- mandatory tree baseline for any serious TabPFN comparison
+- explicitly discussed in the original TabPFN review process and should not be left as a later extra
+- should retain native handling where appropriate instead of forcing linear-model preprocessing onto it
+
+### Extra Trees or LightGBM
+
+- useful second tree-family baseline once the XGBoost path is stable
+- helps distinguish whether any gain is specific to one boosting implementation or more general across strong tabular trees
 
 ### MLP
 
@@ -36,13 +43,14 @@ Initial comparable models for the pilot benchmark.
 
 - target model family under study
 - potentially stronger novelty signal than standard tabular baselines alone
-- may need a narrower pilot because of runtime or setup constraints
+- must be evaluated in a regime consistent with its small-data strengths
+- should not receive scaling or one-hot encoding that the current TabPFN guidance advises against
 
 ## Initial Recommendation
 
-Start the first pilot with `Logistic Regression`, `Random Forest`, `MLP`, and `TabPFN`. Add gradient boosting immediately after the end-to-end Flower path is stable if local runtime remains acceptable.
+Start the engineering slice with `Logistic Regression`, then make `Random Forest`, `XGBoost`, and `TabPFN` the first study-facing comparison set. Keep `MLP` as a secondary neural reference once the tree baselines and split regimes are stable.
 
 ## Open Questions
 
-- exact implementation choice for gradient boosting under the Flower-only constraint
-- fairness of comparing TabPFN on the smallest pilot datasets versus larger-scale datasets
+- exact choice between XGBoost-only versus XGBoost plus LightGBM or Extra Trees in the first full matrix
+- whether to add a second tabular foundation model after the first robust TabPFN versus tree benchmark lands

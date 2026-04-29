@@ -16,11 +16,14 @@ dependencies = [
 
 [project.optional-dependencies]
 benchmark = [
-  "flwr>=1.19,<2",
+  "flwr[simulation]>=1.29,<1.30",
+  "flwr-datasets>=0.5,<0.6",
   "numpy>=1.26",
   "pandas>=2.2",
+  "protobuf>=6.31.1,<7",
   "scikit-learn>=1.5",
   "tabpfn>=2.0",
+  "xgboost>=2.1",
 ]
 
 [tool.setuptools]

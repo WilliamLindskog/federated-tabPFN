@@ -11,7 +11,9 @@ from .directions import consume_latest_direction
 from .preflight import write_preflight_artifacts
 from .pilot import run_flower_smoke_pilot
 from .project import default_paths
+from .results_summary import format_results_summary
 from .status import load_status, update_worker_status
+from .study_registry import format_study_registry
 
 app = typer.Typer(help="Utilities for the federated-tabPFN benchmark scaffold.")
 worker_app = typer.Typer(help="Worker commands for execution updates and preflight steps.")
@@ -76,6 +78,18 @@ def render_dashboard() -> None:
     """Generate the interactive experiment tracking dashboard."""
     output_path = write_dashboard()
     typer.echo(str(output_path.resolve()))
+
+
+@app.command("show-results")
+def show_results(limit: int = typer.Option(5, min=1, help="Maximum number of recent runs to show.")) -> None:
+    """Print a compact summary of recent dataset-backed experiment results."""
+    typer.echo(format_results_summary(limit=limit))
+
+
+@app.command("show-study-datasets")
+def show_study_datasets() -> None:
+    """Print the locked paper-facing dataset registry."""
+    typer.echo(format_study_registry())
 
 
 @worker_app.command("update")

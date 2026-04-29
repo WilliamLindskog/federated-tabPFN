@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .project import default_paths
+from .results_summary import results_summary_payload, write_results_summary
 from .status import load_status
 
 
@@ -34,6 +35,7 @@ def _dashboard_payload() -> dict[str, Any]:
         "status": load_status(),
         "pilot_summary": _latest_pilot_summary(),
         "active_direction": _active_direction(),
+    "results_summary": results_summary_payload(),
     }
 
 
@@ -109,6 +111,9 @@ def render_dashboard_html() -> str:
     .section-stack {{ display: grid; gap: 18px; }}
     .list {{ display: grid; gap: 10px; padding: 0; margin: 0; list-style: none; }}
     .list li {{ border: 1px solid var(--line); border-radius: 16px; padding: 14px; background: rgba(255,255,255,0.5); }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 0.92rem; }}
+    th, td {{ text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }}
+    th {{ color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; }}
     .small {{ color: var(--muted); font-size: 0.92rem; }}
     .toolbar {{ display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }}
     button {{
@@ -143,6 +148,27 @@ def render_dashboard_html() -> str:
         <h2>Experiment Tracker</h2>
         <h1>federated<br>TabPFN</h1>
         <p class=\"lede\" id=\"objective\"></p>
+        <article class="panel">
+          <h2>Recent Runs</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Dataset</th>
+                <th>Baseline</th>
+                <th>Split</th>
+                <th>Accuracy</th>
+                <th>Runtime</th>
+              </tr>
+            </thead>
+            <tbody id="recent-runs"></tbody>
+          </table>
+        </article>
+        <article class="panel">
+          <h2>Paper Track</h2>
+          <h3 id="paper-track-name"></h3>
+          <p class="small" id="paper-track-meta"></p>
+          <ul class="list" id="paper-track-list"></ul>
+        </article>
         <div class=\"pill-row\" id=\"hero-pills\"></div>
       </article>
       <article class=\"panel\">
@@ -202,6 +228,7 @@ def render_dashboard_html() -> str:
     const status = payload.status || {{}};
     const pilot = payload.pilot_summary || null;
     const direction = payload.active_direction || status.active_direction || null;
+    const resultsSummary = payload.results_summary || {{}};
 
     const setText = (id, value) => {{
       document.getElementById(id).textContent = value || 'n/a';
@@ -276,6 +303,46 @@ def render_dashboard_html() -> str:
       }});
     }}
 
+    const recentRunsBody = document.getElementById('recent-runs');
+    const recentRuns = resultsSummary.recent_runs || [];
+    if (!recentRuns.length) {{
+      const row = document.createElement('tr');
+      row.innerHTML = '<td colspan="5" class="empty">No dataset-backed results found.</td>';
+      recentRunsBody.appendChild(row);
+    }} else {{
+      recentRuns.forEach((run) => {{
+        const row = document.createElement('tr');
+        row.innerHTML = `
+          <td>${{run.dataset}}</td>
+          <td>${{run.baseline}}</td>
+          <td>${{run.split_regime}}</td>
+          <td>${{run.accuracy == null ? 'n/a' : run.accuracy.toFixed(3)}}</td>
+          <td>${{run.runtime_seconds == null ? 'n/a' : run.runtime_seconds.toFixed(2) + 's'}}</td>
+        `;
+        recentRunsBody.appendChild(row);
+      }});
+    }}
+
+    const paperTrack = (resultsSummary.study_registry || {{}}).paper_track || null;
+    setText('paper-track-name', paperTrack ? paperTrack.name : 'No paper track loaded');
+    setText(
+      'paper-track-meta',
+      paperTrack ? `${{paperTrack.dataset_count}} datasets from the TabPFN paper-aligned numerical CC18 slice` : ''
+    );
+    const paperTrackList = document.getElementById('paper-track-list');
+    if (!paperTrack || !(paperTrack.datasets || []).length) {{
+      const item = document.createElement('li');
+      item.className = 'empty';
+      item.textContent = 'No study registry available.';
+      paperTrackList.appendChild(item);
+    }} else {{
+      paperTrack.datasets.slice(0, 8).forEach((dataset) => {{
+        const item = document.createElement('li');
+        item.innerHTML = `<strong>${{dataset.data_id}} | ${{dataset.name}}</strong><br><span class="small">n=${{dataset.n_instances}}, p=${{dataset.n_features}}, classes=${{dataset.n_classes}}</span>`;
+        paperTrackList.appendChild(item);
+      }});
+    }}
+
     document.getElementById('status-json').textContent = JSON.stringify(status, null, 2);
     document.getElementById('pilot-json').textContent = JSON.stringify(pilot, null, 2);
     document.getElementById('direction-json').textContent = JSON.stringify(direction, null, 2);
@@ -298,5 +365,6 @@ def render_dashboard_html() -> str:
 def write_dashboard() -> Path:
     output_path = default_paths().reports / "generated" / "dashboard.html"
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    write_results_summary()
     output_path.write_text(render_dashboard_html(), encoding="utf-8")
     return output_path

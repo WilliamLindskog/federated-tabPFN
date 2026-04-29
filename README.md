@@ -13,6 +13,7 @@ Build a local-first, public-data-only benchmark that answers a narrow research q
 - Local-machine execution first.
 - Start with a pilot before widening scope.
 - Save reports from repo artifacts, not from memory.
+- Track the modern Flower surface, not deprecated simulation helpers.
 
 ## Initial Deliverables
 
@@ -51,7 +52,7 @@ Expertise is stored in skills rather than split into many narrow agent personas.
 3. Read [docs/capability-contract.md](docs/capability-contract.md).
 4. Review [docs/dataset-shortlist.md](docs/dataset-shortlist.md) and [docs/baseline-shortlist.md](docs/baseline-shortlist.md).
 5. Start with [experiments/pilot.md](experiments/pilot.md).
-6. Run `python -m federated_tabpfn show-config`, `python -m federated_tabpfn check-ready`, `python -m federated_tabpfn worker preflight`, `python -m federated_tabpfn worker run-pilot`, `python -m federated_tabpfn worker run-dataset-baseline`, or `python -m federated_tabpfn render-dashboard`.
+6. Run `python -m federated_tabpfn show-config`, `python -m federated_tabpfn show-study-datasets`, `python -m federated_tabpfn show-results`, `python -m federated_tabpfn check-ready`, `python -m federated_tabpfn worker preflight`, `python -m federated_tabpfn worker run-pilot`, `python -m federated_tabpfn worker run-dataset-baseline`, or `python -m federated_tabpfn render-dashboard`.
 
 ## Worker Status Surface
 
@@ -71,24 +72,29 @@ The first concrete worker execution step is `python -m federated_tabpfn worker p
 The first local Flower execution step is `python -m federated_tabpfn worker run-pilot`, which:
 
 - reads the locked pilot config
-- runs a local Flower smoke simulation
+- runs a local Flower Message API smoke simulation
 - saves a pilot artifact in `results/<run-name>/pilot-summary.json`
 - publishes a worker update that Pengu can report back
 
 The first dataset-backed benchmark step is `python -m federated_tabpfn worker run-dataset-baseline`, which:
 
-- loads the Adult dataset
-- runs a federated logistic regression baseline under Flower
+- loads the Adult engineering slice
+- runs a federated logistic regression baseline under Flower's Message API
 - saves a summary artifact in `results/<run-name>/dataset-baseline-summary.json`
 - updates worker status and the dashboard for Pengu to report
 
 The interactive tracking UI is `reports/generated/dashboard.html`, which is regenerated when worker commands update project state.
 
+The repo also generates a Telegram-friendly results summary under:
+
+- `reports/generated/results-summary.json`
+- `reports/generated/results-summary.md`
+
 ## Current Status
 
-This repository is intentionally scaffolded for the first pilot. The next implementation slice is:
+This repository is now in an early study-facing pilot phase. The executable path is still intentionally narrow:
 
-- finalize dataset shortlist
-- finalize baseline shortlist
-- add a first config-driven Flower pilot entrypoint
-- record local runtime assumptions
+- Adult plus logistic regression remains the engineering slice used to validate orchestration and artifact quality
+- Flower execution has been moved onto the Message API path so future baselines do not build on deprecated abstractions
+- the study shortlist is now locked to the exact 18-dataset numerical no-missing OpenML-CC18 slice from the original TabPFN paper
+- the next expansion should add Flower Datasets-based split regimes and stronger tree baselines, starting with XGBoost

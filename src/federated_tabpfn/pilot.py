@@ -1,48 +1,20 @@
 from __future__ import annotations
 
 import json
+import resource
+import shutil
+import subprocess
+import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import flwr as fl
 import numpy as np
-from flwr.common import Context
+from flwr.app import Context
 
 from .project import default_paths
-
-
-class SmokeNumPyClient(fl.client.NumPyClient):
-    def __init__(self, cid: str) -> None:
-        self.cid = cid
-        self.parameters = [np.array([0.0, float(cid)], dtype=np.float32)]
-
-    def get_parameters(self, config: dict[str, Any]) -> list[np.ndarray]:
-        return self.parameters
-
-    def fit(self, parameters: list[np.ndarray], config: dict[str, Any]) -> tuple[list[np.ndarray], int, dict[str, Any]]:
-        updated = np.array(parameters[0], copy=True)
-        updated[0] = updated[0] + 0.1 + (0.05 * int(self.cid))
-        updated[1] = float(int(self.cid))
-        self.parameters = [updated]
-        return self.parameters, 16, {"train_loss": round(1.0 / (int(self.cid) + 2), 4)}
-
-    def evaluate(self, parameters: list[np.ndarray], config: dict[str, Any]) -> tuple[float, int, dict[str, Any]]:
-        accuracy = round(0.55 + (0.05 * int(self.cid)), 4)
-        return 1.0 - accuracy, 16, {"accuracy": accuracy}
-
-
-def _average_metrics(metrics: list[tuple[int, dict[str, Any]]]) -> dict[str, Any]:
-    if not metrics:
-        return {}
-    totals: dict[str, float] = {}
-    total_examples = 0
-    for num_examples, metric_values in metrics:
-        total_examples += num_examples
-        for key, value in metric_values.items():
-            totals[key] = totals.get(key, 0.0) + (float(value) * num_examples)
-    return {key: round(value / total_examples, 6) for key, value in totals.items()}
 
 
 def _client_id_from_context(context: Context | str) -> str:
@@ -55,77 +27,156 @@ def _client_id_from_context(context: Context | str) -> str:
     return str(partition_id)
 
 
-def _history_to_dict(history: fl.server.history.History) -> dict[str, Any]:
+def _resource_usage() -> dict[str, float | int]:
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    max_rss = int(usage.ru_maxrss if sys.platform == "darwin" else usage.ru_maxrss * 1024)
     return {
-        "losses_distributed": [[round_num, loss] for round_num, loss in history.losses_distributed],
-        "losses_centralized": [[round_num, loss] for round_num, loss in history.losses_centralized],
-        "metrics_distributed_fit": {
-            key: [[round_num, value] for round_num, value in values]
-            for key, values in history.metrics_distributed_fit.items()
-        },
-        "metrics_distributed": {
-            key: [[round_num, value] for round_num, value in values]
-            for key, values in history.metrics_distributed.items()
-        },
-        "metrics_centralized": {
-            key: [[round_num, value] for round_num, value in values]
-            for key, values in history.metrics_centralized.items()
-        },
+        "process_user_cpu_seconds": round(float(usage.ru_utime), 4),
+        "process_system_cpu_seconds": round(float(usage.ru_stime), 4),
+        "max_rss_bytes": max_rss,
     }
+
+
+def _metric_records_to_history(metrics_by_round: dict[int, MetricRecord]) -> dict[str, list[list[float | int]]]:
+    history: dict[str, list[list[float | int]]] = {}
+    for round_num, record in sorted(metrics_by_round.items()):
+        for key, value in dict(record).items():
+            if key == "num-examples":
+                continue
+            if isinstance(value, (int, float, np.integer, np.floating)):
+                history.setdefault(key, []).append([round_num, round(float(value), 6)])
+    return history
+
+
+def _result_to_history_dict(result: Any) -> dict[str, Any]:
+    return {
+        "losses_distributed": [],
+        "losses_centralized": [],
+        "metrics_distributed_fit": _metric_records_to_history(result.train_metrics_clientapp),
+        "metrics_distributed": _metric_records_to_history(result.evaluate_metrics_clientapp),
+        "metrics_centralized": _metric_records_to_history(result.evaluate_metrics_serverapp),
+    }
+
+
+def _arrays_num_bytes(ndarrays: list[np.ndarray]) -> int:
+    return int(sum(array.nbytes for array in ndarrays))
+
+
+def _run_flower_app(*, run_config: dict[str, str | int], num_supernodes: int) -> None:
+    def _format_value(value: str | int) -> str:
+        if isinstance(value, str):
+            escaped = value.replace('"', '\\"')
+            return f'"{escaped}"'
+        return str(value)
+
+    config_text = " ".join(f"{key}={_format_value(value)}" for key, value in run_config.items())
+    env = dict(**__import__("os").environ)
+    src_path = str(default_paths().root / "src")
+    env["PYTHONPATH"] = src_path if not env.get("PYTHONPATH") else f"{src_path}:{env['PYTHONPATH']}"
+    flwr_executable = shutil.which("flwr")
+    if flwr_executable is None:
+        raise FileNotFoundError("Could not find the 'flwr' executable in PATH.")
+    flwr_home = default_paths().root / ".flower-local"
+    flwr_home.mkdir(parents=True, exist_ok=True)
+    (flwr_home / "config.toml").write_text(
+        "\n".join(
+            [
+                "[superlink]",
+                'default = "local"',
+                "",
+                "[superlink.local]",
+                'address = ":local:"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    with tempfile.TemporaryDirectory(prefix="federated-tabpfn-flower-app-") as temp_dir:
+        temp_path = Path(temp_dir)
+        (temp_path / "LICENSE").write_text("Temporary local Flower app scaffold.\n", encoding="utf-8")
+        (temp_path / "pyproject.toml").write_text(
+            "\n".join(
+                [
+                    "[build-system]",
+                    'requires = ["setuptools>=68", "wheel"]',
+                    'build-backend = "setuptools.build_meta"',
+                    "",
+                    "[project]",
+                    'name = "federated-tabpfn-local-runner"',
+                    'version = "0.0.0"',
+                    'description = "Temporary Flower app wrapper for local federated-tabPFN runs"',
+                    'license = { file = "LICENSE" }',
+                    'dependencies = ["flwr[simulation]>=1.29,<1.30"]',
+                    "",
+                    "[tool.flwr.app]",
+                    'publisher = "local"',
+                    'fab-format-version = 1',
+                    'flwr-version-target = "1.29.0"',
+                    "",
+                    "[tool.flwr.app.components]",
+                    'serverapp = "federated_tabpfn.server_app:app"',
+                    'clientapp = "federated_tabpfn.client_app:app"',
+                    "",
+                    "[tool.flwr.app.config]",
+                    'scenario = "smoke"',
+                    'run-name = "pilot-smoke"',
+                    'num-server-rounds = 1',
+                    'num-clients = 2',
+                    'selected-dataset = "adult_engineering_slice"',
+                    'selected-baseline = "logistic_regression"',
+                    'selected-split-regime = "iid"',
+                    'dataset-backed-max-rows = 2000',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        subprocess.run(
+            [
+                flwr_executable,
+                "run",
+                str(temp_path),
+                "local",
+                "--stream",
+                "--run-config",
+                config_text,
+                "--federation-config",
+                f"num-supernodes={num_supernodes}",
+            ],
+            check=True,
+            cwd=default_paths().root,
+            env={**env, "FLWR_HOME": str(flwr_home), "FLWR_LOCAL_CONTROL_API_PORT": "39193"},
+        )
+
+
+def _wait_for_fresh_artifact(artifact_path: Path, *, started_at: float, timeout_seconds: float = 180.0) -> Path:
+    deadline = time.time() + timeout_seconds
+    while time.time() <= deadline:
+        if artifact_path.exists() and artifact_path.stat().st_mtime >= started_at:
+            return artifact_path
+        time.sleep(0.5)
+    raise FileNotFoundError(f"Expected fresh artifact at {artifact_path} within {timeout_seconds} seconds.")
 
 
 def run_flower_smoke_pilot(config: dict[str, Any], run_name: str) -> Path:
     pilot = config.get("pilot", {})
     num_clients = int(pilot.get("num_clients", 2))
-    num_rounds = int(pilot.get("num_rounds", 1))
-
-    run_dir = default_paths().results / run_name
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    strategy = fl.server.strategy.FedAvg(
-        fraction_fit=1.0,
-        fraction_evaluate=1.0,
-        min_fit_clients=num_clients,
-        min_evaluate_clients=num_clients,
-        min_available_clients=num_clients,
-        fit_metrics_aggregation_fn=_average_metrics,
-        evaluate_metrics_aggregation_fn=_average_metrics,
+    artifact_path = default_paths().results / run_name / "pilot-summary.json"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    if artifact_path.exists():
+        artifact_path.unlink()
+    started_at = time.time()
+    _run_flower_app(
+        run_config={
+            "scenario": "smoke",
+            "run-name": run_name,
+            "num-server-rounds": int(pilot.get("num_rounds", 1)),
+            "num-clients": num_clients,
+            "selected-dataset": str(pilot.get("selected_dataset", "adult_engineering_slice")),
+            "selected-baseline": str(pilot.get("selected_baseline", "logistic_regression")),
+            "selected-split-regime": str(pilot.get("selected_split_regime", "iid")),
+            "dataset-backed-max-rows": int(pilot.get("dataset_backed_max_rows", 2000)),
+        },
+        num_supernodes=num_clients,
     )
-
-    def client_fn(context: Context | str) -> fl.client.Client:
-        return SmokeNumPyClient(_client_id_from_context(context)).to_client()
-
-    started_at = datetime.now(timezone.utc).isoformat()
-    start = time.perf_counter()
-    history = fl.simulation.start_simulation(
-        client_fn=client_fn,
-        num_clients=num_clients,
-        config=fl.server.ServerConfig(num_rounds=num_rounds),
-        strategy=strategy,
-        client_resources={"num_cpus": 1},
-        ray_init_args={"include_dashboard": False, "ignore_reinit_error": True},
-    )
-    runtime_seconds = round(time.perf_counter() - start, 4)
-
-    report = {
-        "run_name": run_name,
-        "started_at": started_at,
-        "completed_at": datetime.now(timezone.utc).isoformat(),
-        "framework": config.get("framework"),
-        "execution_mode": config.get("execution_mode"),
-        "datasets": config.get("datasets", []),
-        "baselines": config.get("baselines", []),
-        "selected_baseline": pilot.get("selected_baseline"),
-        "num_clients": num_clients,
-        "num_rounds": num_rounds,
-        "smoke_test": bool(pilot.get("smoke_test", False)),
-        "runtime_seconds": runtime_seconds,
-        "history": _history_to_dict(history),
-        "notes": [
-            "This is a Flower smoke pilot using synthetic client behavior.",
-            "It validates local execution, artifact creation, and status reporting rather than benchmark quality.",
-        ],
-    }
-    artifact_path = run_dir / "pilot-summary.json"
-    artifact_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    return artifact_path
+    return _wait_for_fresh_artifact(artifact_path, started_at=started_at)

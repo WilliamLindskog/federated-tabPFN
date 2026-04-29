@@ -8,6 +8,7 @@ venv/
 *.egg-info/
 build/
 dist/
+.flower-local/
 results/**
 !results/.gitkeep
 reports/generated/**
