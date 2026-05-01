@@ -52,7 +52,8 @@ Expertise is stored in skills rather than split into many narrow agent personas.
 3. Read [docs/capability-contract.md](docs/capability-contract.md).
 4. Review [docs/dataset-shortlist.md](docs/dataset-shortlist.md) and [docs/baseline-shortlist.md](docs/baseline-shortlist.md).
 5. Start with [experiments/pilot.md](experiments/pilot.md).
-6. Run `python -m federated_tabpfn show-config`, `python -m federated_tabpfn show-study-datasets`, `python -m federated_tabpfn show-results`, `python -m federated_tabpfn check-ready`, `python -m federated_tabpfn worker preflight`, `python -m federated_tabpfn worker run-pilot`, `python -m federated_tabpfn worker run-dataset-baseline`, `python -m federated_tabpfn worker run-plan`, or `python -m federated_tabpfn render-dashboard`.
+6. If a worker needs external credentials such as `TABPFN_TOKEN`, put them in a local `.env` in this repo or point `FEDERATED_TABPFN_ENV_FILE` at another env file before running commands.
+7. Run `python -m federated_tabpfn show-config`, `python -m federated_tabpfn show-study-datasets`, `python -m federated_tabpfn show-results`, `python -m federated_tabpfn check-ready`, `python -m federated_tabpfn worker preflight`, `python -m federated_tabpfn worker run-pilot`, `python -m federated_tabpfn worker run-dataset-baseline`, `python -m federated_tabpfn worker run-plan`, or `python -m federated_tabpfn render-dashboard`.
 
 ## Worker Status Surface
 

@@ -14,12 +14,15 @@ from .preflight import write_preflight_artifacts
 from .pilot import run_flower_smoke_pilot
 from .project import default_paths
 from .results_summary import format_results_summary
+from .runtime_env import load_runtime_env
 from .status import load_status, update_worker_status
 from .study_registry import format_study_registry
 
 app = typer.Typer(help="Utilities for the federated-tabPFN benchmark scaffold.")
 worker_app = typer.Typer(help="Worker commands for execution updates and preflight steps.")
 app.add_typer(worker_app, name="worker")
+
+load_runtime_env()
 
 
 def _load_pilot_config() -> dict:

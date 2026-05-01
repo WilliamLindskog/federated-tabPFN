@@ -6,6 +6,8 @@ This file defines how specialized workers should execute and report status to Pe
 
 Workers do not report status conversationally only. They must leave repo artifacts that Pengu can read.
 
+If a worker depends on external credentials such as `TABPFN_TOKEN`, those credentials should be loaded from a local `.env` in the repo or via `FEDERATED_TABPFN_ENV_FILE` before execution starts.
+
 ## Required Status Outputs
 
 - `reports/generated/execution-status.json`
