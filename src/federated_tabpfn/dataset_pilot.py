@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import xgboost as xgb
 from flwr.app import ArrayRecord, Context, Message, MetricRecord, RecordDict
 from flwr.clientapp import ClientApp
 from flwr_datasets import FederatedDataset
@@ -17,14 +18,23 @@ from flwr.serverapp.strategy import FedAvg
 from flwr.simulation import run_simulation
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import SGDClassifier
+from sklearn.metrics import accuracy_score, log_loss
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler
 
-from .pilot import _arrays_num_bytes, _client_id_from_context, _resource_usage, _result_to_history_dict
+from .pilot import (
+    _arrays_num_bytes,
+    _client_id_from_context,
+    _resource_usage,
+    _result_to_history_dict,
+    _run_flower_app,
+    _wait_for_fresh_artifact,
+)
 from .project import default_paths
 
 ADULT_DATASET_NAME = "scikit-learn/adult-census-income"
 ADULT_TARGET_COLUMN = "income"
+SUPPORTED_DATASET_BACKED_BASELINES = frozenset({"logistic_regression", "xgboost"})
 
 
 @dataclass(frozen=True)
@@ -90,7 +100,14 @@ def _preprocess_adult(features: pd.DataFrame) -> np.ndarray:
 
 
 def _fit_adult_preprocessor(features: pd.DataFrame) -> ColumnTransformer:
-    categorical = [column for column in features.columns if str(features[column].dtype) in {"category", "object"}]
+    categorical = [
+        column
+        for column in features.columns
+        if pd.api.types.is_string_dtype(features[column])
+        or pd.api.types.is_object_dtype(features[column])
+        or isinstance(features[column].dtype, pd.CategoricalDtype)
+        or pd.api.types.is_bool_dtype(features[column])
+    ]
     numeric = [column for column in features.columns if column not in categorical]
     transformer = ColumnTransformer(
         transformers=[
@@ -168,6 +185,62 @@ def _create_model(n_features: int) -> SGDClassifier:
     bootstrap_y = np.array([0, 1], dtype=np.int64)
     model.partial_fit(bootstrap_x, bootstrap_y, classes=np.array([0, 1], dtype=np.int64))
     return model
+
+
+def _xgb_params() -> dict[str, Any]:
+    return {
+        "objective": "binary:logistic",
+        "eval_metric": "logloss",
+        "max_depth": 6,
+        "eta": 0.3,
+        "subsample": 1.0,
+        "colsample_bytree": 1.0,
+        "tree_method": "hist",
+        "verbosity": 0,
+        "seed": 42,
+    }
+
+
+def _bytes_to_arrayrecord(model_bytes: bytes) -> ArrayRecord:
+    return ArrayRecord([np.frombuffer(model_bytes, dtype=np.uint8)])
+
+
+def _arrayrecord_to_model_bytes(arrays: ArrayRecord) -> bytes:
+    return arrays["0"].numpy().tobytes()
+
+
+def _load_xgb_booster(model_bytes: bytes) -> xgb.Booster:
+    booster = xgb.Booster()
+    booster.load_model(bytearray(model_bytes))
+    return booster
+
+
+def _train_xgb_booster(
+    *,
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    current_model_bytes: bytes,
+) -> xgb.Booster:
+    dtrain = xgb.DMatrix(x_train, label=y_train)
+    if current_model_bytes:
+        current_booster = _load_xgb_booster(current_model_bytes)
+        return xgb.train(_xgb_params(), dtrain, num_boost_round=1, xgb_model=current_booster)
+    return xgb.train(_xgb_params(), dtrain, num_boost_round=1)
+
+
+def _xgb_prediction_metrics(
+    booster: xgb.Booster,
+    *,
+    x_eval: np.ndarray,
+    y_eval: np.ndarray,
+) -> tuple[float, float]:
+    deval = xgb.DMatrix(x_eval, label=y_eval)
+    probabilities = booster.predict(deval)
+    probabilities = np.clip(probabilities, 1e-7, 1 - 1e-7)
+    predictions = (probabilities >= 0.5).astype(np.int64)
+    accuracy = float(accuracy_score(y_eval, predictions))
+    loss_value = float(log_loss(y_eval, probabilities, labels=[0, 1]))
+    return accuracy, loss_value
 
 
 def _get_model_parameters(model: SGDClassifier) -> list[np.ndarray]:
@@ -299,32 +372,74 @@ def _run_dataset_baseline_simulation(
     return artifact_path
 
 
+def _run_dataset_baseline_via_flower_app(
+    *,
+    run_name: str,
+    selected_dataset: str,
+    selected_baseline: str,
+    selected_split_regime: str,
+    num_clients: int,
+    num_rounds: int,
+    max_rows: int,
+) -> Path:
+    artifact_path = default_paths().results / run_name / "dataset-baseline-summary.json"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    if artifact_path.exists():
+        artifact_path.unlink()
+    started_at = time.time()
+    _run_flower_app(
+        run_config={
+            "scenario": "dataset-baseline",
+            "run-name": run_name,
+            "num-server-rounds": num_rounds,
+            "num-clients": num_clients,
+            "selected-dataset": selected_dataset,
+            "selected-baseline": selected_baseline,
+            "selected-split-regime": selected_split_regime,
+            "dataset-backed-max-rows": max_rows,
+        },
+        num_supernodes=num_clients,
+    )
+    return _wait_for_fresh_artifact(artifact_path, started_at=started_at)
+
+
 def _binary_log_loss(y_true: np.ndarray, probabilities: np.ndarray) -> float:
     positive_prob = np.clip(probabilities[:, 1], 1e-7, 1 - 1e-7)
     negative_prob = 1.0 - positive_prob
     return float(-np.mean((y_true * np.log(positive_prob)) + ((1 - y_true) * np.log(negative_prob))))
 
 
-def run_dataset_backed_logreg(config: dict[str, Any], run_name: str) -> Path:
+def run_dataset_backed_baseline(config: dict[str, Any], run_name: str) -> Path:
     pilot = config.get("pilot", {})
     selected_dataset = str(pilot.get("selected_dataset", "adult_engineering_slice"))
     selected_baseline = str(pilot.get("selected_baseline", "logistic_regression"))
-    if selected_baseline != "logistic_regression":
-        raise ValueError(
-            f"Dataset-backed baseline is only implemented for 'logistic_regression' right now, got '{selected_baseline}'."
-        )
 
     num_clients = int(pilot.get("num_clients", 2))
     num_rounds = int(pilot.get("num_rounds", 1))
     max_rows = int(pilot.get("dataset_backed_max_rows", 2000))
     selected_split_regime = str(pilot.get("selected_split_regime", "iid"))
     _dataset_state(selected_dataset, max_rows, num_clients, selected_split_regime)
-    return _run_dataset_baseline_simulation(
-        run_name=run_name,
-        selected_dataset=selected_dataset,
-        selected_baseline=selected_baseline,
-        selected_split_regime=selected_split_regime,
-        num_clients=num_clients,
-        num_rounds=num_rounds,
-        max_rows=max_rows,
+    if selected_baseline == "logistic_regression":
+        return _run_dataset_baseline_simulation(
+            run_name=run_name,
+            selected_dataset=selected_dataset,
+            selected_baseline=selected_baseline,
+            selected_split_regime=selected_split_regime,
+            num_clients=num_clients,
+            num_rounds=num_rounds,
+            max_rows=max_rows,
+        )
+    if selected_baseline == "xgboost":
+        return _run_dataset_baseline_via_flower_app(
+            run_name=run_name,
+            selected_dataset=selected_dataset,
+            selected_baseline=selected_baseline,
+            selected_split_regime=selected_split_regime,
+            num_clients=num_clients,
+            num_rounds=num_rounds,
+            max_rows=max_rows,
+        )
+    raise ValueError(
+        "Dataset-backed baseline is only implemented for "
+        f"{sorted(SUPPORTED_DATASET_BACKED_BASELINES)!r} right now, got '{selected_baseline}'."
     )

@@ -34,6 +34,29 @@ Use:
 
 This accepts the latest unconsumed direction from Pengu, records it as the active direction, and publishes the acceptance into execution status.
 
+Use:
+
+`python -m federated_tabpfn worker run-plan --phase engineering`
+
+This is the first repeatable phase runner. It:
+
+- expands a configured study phase into concrete runs
+- skips slices that are already completed
+- runs supported slices in sequence
+- leaves unsupported slices explicitly blocked for later implementation
+- refreshes worker status and dashboard artifacts after each run
+
+Use:
+
+`python -m federated_tabpfn worker run-plan --phase overall`
+
+This is the truthful end-to-end gate. It:
+
+- combines the current engineering and workshop IID phases
+- skips anything already completed
+- runs whatever is genuinely supported now
+- reports all remaining blocked slices explicitly before the study can be considered fully runnable
+
 ## Intended Flow
 
 1. Pengu assigns a narrow slice to a worker.

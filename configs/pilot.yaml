@@ -54,7 +54,7 @@ metrics:
   - process_system_cpu_seconds
   - max_rss_bytes
 notes:
-  - The executable engineering slice remains Adult plus federated logistic regression until the study matrix is fully wired.
+  - The executable engineering slice currently covers Adult plus federated logistic regression and XGBoost.
   - The study-facing shortlist is locked to the 18-dataset numerical no-missing OpenML-CC18 subset used in the original TabPFN paper.
   - Migrate all executable runs to Flower's Message API before expanding the benchmark matrix.
   - Prioritize a workshop-ready IID comparison story before widening to non-IID regimes.

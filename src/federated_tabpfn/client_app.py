@@ -7,7 +7,17 @@ from flwr.app import ArrayRecord, Context, Message, MetricRecord, RecordDict
 from flwr.clientapp import ClientApp
 from sklearn.metrics import accuracy_score, log_loss
 
-from .dataset_pilot import _create_model, _dataset_state, _get_model_parameters, _set_model_parameters
+from .dataset_pilot import (
+    _arrayrecord_to_model_bytes,
+    _bytes_to_arrayrecord,
+    _create_model,
+    _dataset_state,
+    _get_model_parameters,
+    _load_xgb_booster,
+    _set_model_parameters,
+    _train_xgb_booster,
+    _xgb_prediction_metrics,
+)
 from .pilot import _client_id_from_context
 
 app = ClientApp()
@@ -44,10 +54,33 @@ def _dataset_train(msg: Message, context: Context) -> Message:
     partition_id = int(_client_id_from_context(context))
     num_clients = int(context.run_config["num-clients"])
     selected_dataset = str(context.run_config["selected-dataset"])
+    selected_baseline = str(context.run_config["selected-baseline"])
     max_rows = int(context.run_config["dataset-backed-max-rows"])
     selected_split_regime = str(context.run_config["selected-split-regime"])
     partitions, n_features = _scenario_dataset_state(selected_dataset, max_rows, num_clients, selected_split_regime)
     partition = partitions[partition_id]
+    if selected_baseline == "xgboost":
+        current_model_bytes = _arrayrecord_to_model_bytes(msg.content["arrays"])
+        booster = _train_xgb_booster(
+            x_train=partition.x_train,
+            y_train=partition.y_train,
+            current_model_bytes=current_model_bytes,
+        )
+        train_accuracy, train_loss = _xgb_prediction_metrics(
+            booster,
+            x_eval=partition.x_train,
+            y_eval=partition.y_train,
+        )
+        metrics = MetricRecord(
+            {
+                "train_accuracy": round(train_accuracy, 6),
+                "train_loss": round(train_loss, 6),
+                "num-examples": len(partition.x_train),
+            }
+        )
+        model_bytes = bytes(booster.save_raw(raw_format="json"))
+        content = RecordDict({"arrays": _bytes_to_arrayrecord(model_bytes), "metrics": metrics})
+        return Message(content=content, reply_to=msg)
     model = _create_model(n_features)
     _set_model_parameters(model, msg.content["arrays"].to_numpy_ndarrays(), n_features)
     model.partial_fit(partition.x_train, partition.y_train)
@@ -62,10 +95,29 @@ def _dataset_evaluate(msg: Message, context: Context) -> Message:
     partition_id = int(_client_id_from_context(context))
     num_clients = int(context.run_config["num-clients"])
     selected_dataset = str(context.run_config["selected-dataset"])
+    selected_baseline = str(context.run_config["selected-baseline"])
     max_rows = int(context.run_config["dataset-backed-max-rows"])
     selected_split_regime = str(context.run_config["selected-split-regime"])
     partitions, n_features = _scenario_dataset_state(selected_dataset, max_rows, num_clients, selected_split_regime)
     partition = partitions[partition_id]
+    if selected_baseline == "xgboost":
+        current_model_bytes = _arrayrecord_to_model_bytes(msg.content["arrays"])
+        if not current_model_bytes:
+            raise ValueError("Expected a trained XGBoost model before evaluation, but received an empty model.")
+        booster = _load_xgb_booster(current_model_bytes)
+        accuracy, loss_value = _xgb_prediction_metrics(
+            booster,
+            x_eval=partition.x_eval,
+            y_eval=partition.y_eval,
+        )
+        metrics = MetricRecord(
+            {
+                "accuracy": round(accuracy, 6),
+                "eval_loss": round(loss_value, 6),
+                "num-examples": len(partition.x_eval),
+            }
+        )
+        return Message(content=RecordDict({"metrics": metrics}), reply_to=msg)
     model = _create_model(n_features)
     _set_model_parameters(model, msg.content["arrays"].to_numpy_ndarrays(), n_features)
     probabilities = model.predict_proba(partition.x_eval)

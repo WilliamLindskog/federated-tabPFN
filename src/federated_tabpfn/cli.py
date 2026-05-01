@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import typer
 import yaml
 
 from .dashboard import write_dashboard
-from .dataset_pilot import run_dataset_backed_logreg
+from .dataset_pilot import SUPPORTED_DATASET_BACKED_BASELINES, run_dataset_backed_baseline
 from .directions import consume_latest_direction
+from .execution_plan import SUPPORTED_PHASES, build_phase_plan, format_phase_plan
 from .preflight import write_preflight_artifacts
 from .pilot import run_flower_smoke_pilot
 from .project import default_paths
@@ -33,6 +35,34 @@ def _contains_pending(value: object) -> bool:
     if isinstance(value, dict):
         return any(_contains_pending(item) for item in value.values())
     return False
+
+
+def _apply_dataset_baseline_overrides(
+    config: dict[str, Any],
+    *,
+    selected_baseline: str | None = None,
+    selected_dataset: str | None = None,
+    selected_split_regime: str | None = None,
+    num_clients: int | None = None,
+    num_rounds: int | None = None,
+    max_rows: int | None = None,
+) -> dict[str, Any]:
+    updated = dict(config)
+    pilot = dict(updated.get("pilot", {}))
+    if selected_baseline is not None:
+        pilot["selected_baseline"] = selected_baseline
+    if selected_dataset is not None:
+        pilot["selected_dataset"] = selected_dataset
+    if selected_split_regime is not None:
+        pilot["selected_split_regime"] = selected_split_regime
+    if num_clients is not None:
+        pilot["num_clients"] = num_clients
+    if num_rounds is not None:
+        pilot["num_rounds"] = num_rounds
+    if max_rows is not None:
+        pilot["dataset_backed_max_rows"] = max_rows
+    updated["pilot"] = pilot
+    return updated
 
 
 @app.command("check-ready")
@@ -195,11 +225,26 @@ def worker_run_pilot(
 def worker_run_dataset_baseline(
     worker: str = typer.Option("experiment-builder", help="Worker publishing the execution step."),
     run_name: str = typer.Option("adult-logreg", help="Run directory name under results/."),
+    selected_baseline: str | None = typer.Option(None, help="Override pilot.selected_baseline for this run."),
+    selected_dataset: str | None = typer.Option(None, help="Override pilot.selected_dataset for this run."),
+    selected_split_regime: str | None = typer.Option(None, help="Override pilot.selected_split_regime for this run."),
+    num_clients: int | None = typer.Option(None, min=1, help="Override pilot.num_clients for this run."),
+    num_rounds: int | None = typer.Option(None, min=1, help="Override pilot.num_rounds for this run."),
+    max_rows: int | None = typer.Option(None, min=1, help="Override pilot.dataset_backed_max_rows for this run."),
 ) -> None:
     """Run the first real dataset-backed federated baseline slice."""
-    config = _load_pilot_config()
+    config = _apply_dataset_baseline_overrides(
+        _load_pilot_config(),
+        selected_baseline=selected_baseline,
+        selected_dataset=selected_dataset,
+        selected_split_regime=selected_split_regime,
+        num_clients=num_clients,
+        num_rounds=num_rounds,
+        max_rows=max_rows,
+    )
+    pilot = dict(config.get("pilot", {}))
     try:
-        artifact_path = run_dataset_backed_logreg(config, run_name)
+        artifact_path = run_dataset_backed_baseline(config, run_name)
     except Exception as exc:
         update_worker_status(
             worker,
@@ -215,14 +260,142 @@ def worker_run_dataset_baseline(
     update_worker_status(
         worker,
         worker_status="completed",
-        summary="Completed the first dataset-backed federated baseline run on Adult with logistic regression.",
-        next_step="Review runtime and metrics, then decide whether to expand to another baseline or dataset.",
+        summary=(
+            "Completed a dataset-backed federated baseline run on the engineering slice "
+            f"using {pilot.get('selected_baseline', 'unknown')} under "
+            f"{pilot.get('selected_split_regime', 'unknown')}."
+        ),
+        next_step=(
+            "Review runtime and metrics, then decide whether to expand to another baseline, "
+            "another split regime, or the first paper-facing IID tranche."
+        ),
         artifact=str(artifact_path.relative_to(default_paths().root)),
         phase="dataset-baseline-complete",
         overall_status="dataset-baseline-complete",
     )
     write_dashboard()
     typer.echo(str(artifact_path.resolve()))
+
+
+@worker_app.command("run-plan")
+def worker_run_plan(
+    phase: str = typer.Option("engineering", help="Study phase to execute."),
+    worker: str = typer.Option("experiment-builder", help="Worker publishing the execution step."),
+    num_clients: int | None = typer.Option(None, min=1, help="Override pilot.num_clients for all runs in this phase."),
+    num_rounds: int | None = typer.Option(None, min=1, help="Override pilot.num_rounds for all runs in this phase."),
+    max_rows: int | None = typer.Option(None, min=1, help="Override pilot.dataset_backed_max_rows for all runs in this phase."),
+    dry_run: bool = typer.Option(False, help="Print the phase plan without running it."),
+    continue_on_error: bool = typer.Option(False, help="Continue to later runs if one run fails."),
+) -> None:
+    """Run a configured study phase end-to-end, skipping runs already completed."""
+    if phase not in SUPPORTED_PHASES:
+        raise typer.BadParameter(f"Unsupported phase '{phase}'. Expected one of: {', '.join(SUPPORTED_PHASES)}.")
+    config = _load_pilot_config()
+    plan = build_phase_plan(
+        config,
+        phase,
+        supported_baselines=set(SUPPORTED_DATASET_BACKED_BASELINES),
+    )
+    plan_text = format_phase_plan(plan)
+    if dry_run:
+        typer.echo(plan_text)
+        return
+
+    if not plan.runnable:
+        update_worker_status(
+            worker,
+            worker_status="blocked",
+            summary=f"No runnable specs found for phase '{phase}'.",
+            next_step=(
+                "Implement the missing dataset or baseline execution path, "
+                "or rerun the plan with a different phase."
+            ),
+            phase="plan-blocked",
+            overall_status="blocked-on-implementation",
+        )
+        write_dashboard()
+        typer.echo(plan_text)
+        raise typer.Exit(code=1)
+
+    completed_now = 0
+    for index, spec in enumerate(plan.runnable, start=1):
+        update_worker_status(
+            worker,
+            worker_status="running",
+            summary=(
+                f"Running phase '{phase}' item {index}/{len(plan.runnable)}: "
+                f"{spec.dataset} | {spec.baseline} | {spec.split_regime}"
+            ),
+            next_step="Wait for the current dataset-backed baseline run to finish.",
+            phase=f"{phase}-running",
+            overall_status="running-plan",
+        )
+        write_dashboard()
+
+        run_config = _apply_dataset_baseline_overrides(
+            config,
+            selected_baseline=spec.baseline,
+            selected_dataset=spec.dataset,
+            selected_split_regime=spec.split_regime,
+            num_clients=num_clients,
+            num_rounds=num_rounds,
+            max_rows=max_rows,
+        )
+        try:
+            artifact_path = run_dataset_backed_baseline(run_config, spec.run_name)
+        except Exception as exc:
+            update_worker_status(
+                worker,
+                worker_status="failed",
+                summary=(
+                    f"Phase '{phase}' failed on {spec.dataset} | {spec.baseline} | "
+                    f"{spec.split_regime}: {exc}"
+                ),
+                next_step=(
+                    "Fix the failing execution path or rerun the plan with supported slices only."
+                ),
+                phase=f"{phase}-failed",
+                overall_status="plan-failed",
+            )
+            write_dashboard()
+            if not continue_on_error:
+                raise typer.Exit(code=1) from exc
+            continue
+
+        completed_now += 1
+        update_worker_status(
+            worker,
+            worker_status="completed",
+            summary=(
+                f"Completed phase '{phase}' item {index}/{len(plan.runnable)}: "
+                f"{spec.dataset} | {spec.baseline} | {spec.split_regime}"
+            ),
+            next_step="Advance to the next runnable spec in the phase plan.",
+            artifact=str(artifact_path.relative_to(default_paths().root)),
+            phase=f"{phase}-running",
+            overall_status="running-plan",
+        )
+        write_dashboard()
+
+    final_summary = (
+        f"Completed {completed_now}/{len(plan.runnable)} runnable specs for phase '{phase}'. "
+        f"Skipped {len(plan.skipped)} already-completed and blocked {len(plan.blocked)} unsupported specs."
+    )
+    next_step = (
+        "Review the new results and decide whether to implement the blocked study-facing slices "
+        "or continue with another supported phase."
+    )
+    final_status = "plan-complete" if not plan.blocked else "plan-partial"
+    update_worker_status(
+        worker,
+        worker_status="completed" if completed_now else "blocked",
+        summary=final_summary,
+        next_step=next_step,
+        phase=f"{phase}-complete",
+        overall_status=final_status,
+    )
+    write_dashboard()
+    typer.echo(plan_text)
 
 
 @worker_app.command("consume-directions")

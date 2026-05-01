@@ -52,7 +52,7 @@ Expertise is stored in skills rather than split into many narrow agent personas.
 3. Read [docs/capability-contract.md](docs/capability-contract.md).
 4. Review [docs/dataset-shortlist.md](docs/dataset-shortlist.md) and [docs/baseline-shortlist.md](docs/baseline-shortlist.md).
 5. Start with [experiments/pilot.md](experiments/pilot.md).
-6. Run `python -m federated_tabpfn show-config`, `python -m federated_tabpfn show-study-datasets`, `python -m federated_tabpfn show-results`, `python -m federated_tabpfn check-ready`, `python -m federated_tabpfn worker preflight`, `python -m federated_tabpfn worker run-pilot`, `python -m federated_tabpfn worker run-dataset-baseline`, or `python -m federated_tabpfn render-dashboard`.
+6. Run `python -m federated_tabpfn show-config`, `python -m federated_tabpfn show-study-datasets`, `python -m federated_tabpfn show-results`, `python -m federated_tabpfn check-ready`, `python -m federated_tabpfn worker preflight`, `python -m federated_tabpfn worker run-pilot`, `python -m federated_tabpfn worker run-dataset-baseline`, `python -m federated_tabpfn worker run-plan`, or `python -m federated_tabpfn render-dashboard`.
 
 ## Worker Status Surface
 
@@ -83,6 +83,21 @@ The first dataset-backed benchmark step is `python -m federated_tabpfn worker ru
 - saves a summary artifact in `results/<run-name>/dataset-baseline-summary.json`
 - updates worker status and the dashboard for Pengu to report
 
+The first phase-oriented execution step is `python -m federated_tabpfn worker run-plan --phase engineering`, which:
+
+- reads the configured study phase from `configs/pilot.yaml`
+- skips already completed runs automatically
+- runs all currently supported slices for that phase in sequence
+- marks unsupported slices explicitly instead of pretending they ran
+- updates worker status, results summaries, and the dashboard after each run
+
+An aggregate planning/execution pass is `python -m federated_tabpfn worker run-plan --phase overall`, which:
+
+- combines the engineering slice and the current workshop IID tranche
+- skips slices that are already completed
+- reports any still-blocked study-facing slices explicitly
+- gives Pengu one truthful top-level answer to “how far can the study run right now?”
+
 The interactive tracking UI is `reports/generated/dashboard.html`, which is regenerated when worker commands update project state.
 
 The repo also generates a Telegram-friendly results summary under:
@@ -94,7 +109,7 @@ The repo also generates a Telegram-friendly results summary under:
 
 This repository is now in an early study-facing pilot phase. The executable path is still intentionally narrow:
 
-- Adult plus logistic regression remains the engineering slice used to validate orchestration and artifact quality
+- Adult plus logistic regression and XGBoost are the currently executable engineering slice baselines
 - Flower execution has been moved onto the Message API path so future baselines do not build on deprecated abstractions
 - the study shortlist is now locked to the exact 18-dataset numerical no-missing OpenML-CC18 slice from the original TabPFN paper
-- the next expansion should add Flower Datasets-based split regimes and stronger tree baselines, starting with XGBoost
+- the next expansion should add the paper-facing dataset execution path plus the remaining core baselines
