@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .results_summary import recent_result_rows
+from .study_registry import dataset_key, dataset_slug, paper_cc18_datasets
 
 SUPPORTED_PHASES = ("engineering", "iid-core", "overall")
 
@@ -46,7 +47,9 @@ def completed_run_keys() -> set[tuple[str, str, str]]:
 def phase_specs(config: dict[str, Any], phase: str) -> list[RunSpec]:
     if phase == "engineering":
         dataset = "adult_engineering_slice"
-        baselines = [str(b) for b in config.get("baselines", [])]
+        study_plan = dict(config.get("study_plan", {}))
+        engineering_baselines = ["logistic_regression", *[str(b) for b in study_plan.get("primary_core_baselines", [])]]
+        baselines = list(dict.fromkeys(engineering_baselines))
         split_regimes = [str(s) for s in config.get("split_regimes", [])]
         return [
             RunSpec(
@@ -61,15 +64,15 @@ def phase_specs(config: dict[str, Any], phase: str) -> list[RunSpec]:
 
     if phase == "iid-core":
         study_plan = dict(config.get("study_plan", {}))
-        dataset = "tabpfn_paper_cc18_numerical_18"
         baselines = [str(b) for b in study_plan.get("primary_core_baselines", [])]
         return [
             RunSpec(
-                dataset=dataset,
+                dataset=dataset_key(dataset),
                 baseline=baseline,
                 split_regime="iid",
-                run_name=f"paper-{baseline_run_slug(baseline)}-iid",
+                run_name=f"paper-{dataset.data_id}-{dataset_slug(dataset)}-{baseline_run_slug(baseline)}-iid",
             )
+            for dataset in paper_cc18_datasets()
             for baseline in baselines
         ]
 
@@ -80,10 +83,10 @@ def phase_specs(config: dict[str, Any], phase: str) -> list[RunSpec]:
 
 
 def _blocked_reason(spec: RunSpec, supported_baselines: set[str]) -> str | None:
-    if spec.dataset != "adult_engineering_slice":
-        return "dataset execution path not implemented yet"
     if spec.baseline not in supported_baselines:
         return "unsupported baseline"
+    if spec.dataset != "adult_engineering_slice" and not spec.dataset.startswith("openml:"):
+        return "dataset execution path not implemented yet"
     return None
 
 

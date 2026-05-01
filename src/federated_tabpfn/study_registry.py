@@ -41,6 +41,31 @@ def paper_cc18_dataset_ids() -> list[int]:
     return [dataset.data_id for dataset in TABPFN_PAPER_CC18_NUMERICAL_18]
 
 
+def paper_cc18_datasets() -> tuple[StudyDataset, ...]:
+    return TABPFN_PAPER_CC18_NUMERICAL_18
+
+
+def dataset_slug(dataset: StudyDataset) -> str:
+    return dataset.name.replace("_", "-")
+
+
+def dataset_key(dataset: StudyDataset) -> str:
+    return f"openml:{dataset.data_id}:{dataset_slug(dataset)}"
+
+
+def parse_dataset_key(selected_dataset: str) -> StudyDataset | None:
+    if not selected_dataset.startswith("openml:"):
+        return None
+    parts = selected_dataset.split(":", 2)
+    if len(parts) < 2:
+        raise ValueError(f"Malformed OpenML dataset key '{selected_dataset}'.")
+    data_id = int(parts[1])
+    for dataset in TABPFN_PAPER_CC18_NUMERICAL_18:
+        if dataset.data_id == data_id:
+            return dataset
+    raise ValueError(f"OpenML dataset id {data_id} is not in the locked paper-track registry.")
+
+
 def study_registry_payload() -> dict[str, Any]:
     return {
         "paper_track": {

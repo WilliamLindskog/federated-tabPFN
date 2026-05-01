@@ -43,7 +43,7 @@ This is the first repeatable phase runner. It:
 - expands a configured study phase into concrete runs
 - skips slices that are already completed
 - runs supported slices in sequence
-- leaves unsupported slices explicitly blocked for later implementation
+- fails fast when a required runtime dependency is missing
 - refreshes worker status and dashboard artifacts after each run
 
 Use:
@@ -54,8 +54,8 @@ This is the truthful end-to-end gate. It:
 
 - combines the current engineering and workshop IID phases
 - skips anything already completed
-- runs whatever is genuinely supported now
-- reports all remaining blocked slices explicitly before the study can be considered fully runnable
+- runs the workshop-first benchmark matrix in sequence
+- surfaces any missing runtime dependency or failed slice as a real execution failure
 
 ## Intended Flow
 

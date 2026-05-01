@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import resource
 import shutil
 import subprocess
@@ -70,14 +71,19 @@ def _run_flower_app(*, run_config: dict[str, str | int], num_supernodes: int) ->
         return str(value)
 
     config_text = " ".join(f"{key}={_format_value(value)}" for key, value in run_config.items())
-    env = dict(**__import__("os").environ)
-    src_path = str(default_paths().root / "src")
+    paths = default_paths()
+    env = dict(**os.environ)
+    src_path = str(paths.root / "src")
     env["PYTHONPATH"] = src_path if not env.get("PYTHONPATH") else f"{src_path}:{env['PYTHONPATH']}"
-    flwr_executable = shutil.which("flwr")
+    venv_flwr = Path(sys.executable).with_name("flwr")
+    flwr_executable = str(venv_flwr) if venv_flwr.exists() else shutil.which("flwr")
     if flwr_executable is None:
         raise FileNotFoundError("Could not find the 'flwr' executable in PATH.")
-    flwr_home = default_paths().root / ".flower-local"
+    flwr_home = paths.root / ".flower-local"
     flwr_home.mkdir(parents=True, exist_ok=True)
+    paths.huggingface_cache.mkdir(parents=True, exist_ok=True)
+    paths.openml_cache.mkdir(parents=True, exist_ok=True)
+    paths.matplotlib_cache.mkdir(parents=True, exist_ok=True)
     (flwr_home / "config.toml").write_text(
         "\n".join(
             [
@@ -144,8 +150,15 @@ def _run_flower_app(*, run_config: dict[str, str | int], num_supernodes: int) ->
                 f"num-supernodes={num_supernodes}",
             ],
             check=True,
-            cwd=default_paths().root,
-            env={**env, "FLWR_HOME": str(flwr_home), "FLWR_LOCAL_CONTROL_API_PORT": "39193"},
+            cwd=paths.root,
+            env={
+                **env,
+                "FLWR_HOME": str(flwr_home),
+                "FLWR_LOCAL_CONTROL_API_PORT": "39193",
+                "HF_HOME": str(paths.huggingface_cache),
+                "HF_DATASETS_CACHE": str(paths.huggingface_cache / "datasets"),
+                "MPLCONFIGDIR": str(paths.matplotlib_cache),
+            },
         )
 
 

@@ -26,6 +26,26 @@ class ProjectPaths:
     def reports(self) -> Path:
         return self.root / "reports"
 
+    @property
+    def cache(self) -> Path:
+        return self.root / ".cache"
+
+    @property
+    def huggingface_cache(self) -> Path:
+        return self.cache / "huggingface"
+
+    @property
+    def openml_cache(self) -> Path:
+        return self.cache / "openml"
+
+    @property
+    def matplotlib_cache(self) -> Path:
+        return self.cache / "matplotlib"
+
+    @property
+    def tabpfn_cache(self) -> Path:
+        return self.cache / "tabpfn"
+
 
 def default_paths() -> ProjectPaths:
     return ProjectPaths(root=Path(__file__).resolve().parents[2])

@@ -78,8 +78,8 @@ The first local Flower execution step is `python -m federated_tabpfn worker run-
 
 The first dataset-backed benchmark step is `python -m federated_tabpfn worker run-dataset-baseline`, which:
 
-- loads the Adult engineering slice
-- runs a federated logistic regression baseline under Flower's Message API
+- loads either the Adult engineering slice or a locked paper-track OpenML dataset
+- runs a Flower-backed baseline for logistic regression, random forest, XGBoost, or TabPFN
 - saves a summary artifact in `results/<run-name>/dataset-baseline-summary.json`
 - updates worker status and the dashboard for Pengu to report
 
@@ -95,7 +95,7 @@ An aggregate planning/execution pass is `python -m federated_tabpfn worker run-p
 
 - combines the engineering slice and the current workshop IID tranche
 - skips slices that are already completed
-- reports any still-blocked study-facing slices explicitly
+- runs the supported workshop-first matrix in sequence
 - gives Pengu one truthful top-level answer to “how far can the study run right now?”
 
 The interactive tracking UI is `reports/generated/dashboard.html`, which is regenerated when worker commands update project state.
@@ -107,9 +107,10 @@ The repo also generates a Telegram-friendly results summary under:
 
 ## Current Status
 
-This repository is now in an early study-facing pilot phase. The executable path is still intentionally narrow:
+This repository is now in an early study-facing execution phase:
 
-- Adult plus logistic regression and XGBoost are the currently executable engineering slice baselines
-- Flower execution has been moved onto the Message API path so future baselines do not build on deprecated abstractions
-- the study shortlist is now locked to the exact 18-dataset numerical no-missing OpenML-CC18 slice from the original TabPFN paper
-- the next expansion should add the paper-facing dataset execution path plus the remaining core baselines
+- Adult engineering runs are executable for logistic regression, random forest, XGBoost, and TabPFN
+- the paper-facing dataset path now targets the locked 18-dataset numerical no-missing OpenML-CC18 slice from the original TabPFN paper
+- XGBoost supports the paper-facing multiclass path
+- random forest uses a Flower-backed serialized local-model ensemble path
+- TabPFN is wired into the same execution surface, but it requires accepted local model access through `TABPFN_TOKEN` or pre-cached weights before those slices can run
