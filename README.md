@@ -113,4 +113,4 @@ This repository is now in an early study-facing execution phase:
 - the paper-facing dataset path now targets the locked 18-dataset numerical no-missing OpenML-CC18 slice from the original TabPFN paper
 - XGBoost supports the paper-facing multiclass path
 - random forest uses a Flower-backed serialized local-model ensemble path
-- TabPFN is wired into the same execution surface, but it requires accepted local model access through `TABPFN_TOKEN` or pre-cached weights before those slices can run
+- TabPFN is wired into the same execution surface through `tabpfn-client`, and it requires `TABPFN_TOKEN` in the runtime environment before those slices can run

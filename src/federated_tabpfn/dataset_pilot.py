@@ -9,8 +9,8 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from tabpfn import TabPFNClassifier
+from tabpfn_client import set_access_token as set_tabpfn_access_token
+from tabpfn_client.estimator import TabPFNClassifier
 import xgboost as xgb
 from flwr.app import ArrayRecord, Context, Message, MetricRecord, RecordDict
 from flwr.clientapp import ClientApp
@@ -382,37 +382,28 @@ def _create_random_forest_model() -> RandomForestClassifier:
     )
 
 
-def _tabpfn_model_path() -> Path:
-    paths = default_paths()
-    paths.tabpfn_cache.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault("TABPFN_MODEL_CACHE_DIR", str(paths.tabpfn_cache))
-    return paths.tabpfn_cache
-
-
 def _create_tabpfn_model() -> TabPFNClassifier:
-    _tabpfn_model_path()
+    token = os.environ.get("TABPFN_TOKEN")
+    if token:
+        set_tabpfn_access_token(token)
     return TabPFNClassifier(
-        device="cpu",
         n_estimators=4,
         ignore_pretraining_limits=True,
-        fit_mode="fit_preprocessors",
-        n_preprocessing_jobs=1,
         random_state=42,
+        paper_version=True,
     )
 
 
 def _tabpfn_ready() -> bool:
-    cache_dir = _tabpfn_model_path()
-    has_cached_weights = any(cache_dir.rglob("*.ckpt"))
-    return has_cached_weights or bool(os.environ.get("TABPFN_TOKEN"))
+    return bool(os.environ.get("TABPFN_TOKEN"))
 
 
 def _ensure_tabpfn_ready() -> None:
     if _tabpfn_ready():
         return
     raise RuntimeError(
-        "TabPFN requires either cached local model weights or a TABPFN_TOKEN with accepted license access. "
-        f"Populate TABPFN_TOKEN or pre-download the weights into {default_paths().tabpfn_cache} before running TabPFN slices."
+        "TabPFN client mode requires TABPFN_TOKEN in the environment. "
+        "Export TABPFN_TOKEN before running TabPFN slices."
     )
 
 
@@ -742,7 +733,6 @@ def run_dataset_backed_baseline(config: dict[str, Any], run_name: str) -> Path:
     selected_split_regime = str(pilot.get("selected_split_regime", "iid"))
     default_paths().openml_cache.mkdir(parents=True, exist_ok=True)
     default_paths().matplotlib_cache.mkdir(parents=True, exist_ok=True)
-    _tabpfn_model_path()
     if selected_baseline == "tabpfn":
         _ensure_tabpfn_ready()
     _dataset_state(selected_dataset, max_rows, num_clients, selected_split_regime)

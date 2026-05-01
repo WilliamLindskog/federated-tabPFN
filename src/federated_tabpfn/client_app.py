@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from functools import lru_cache
-import os
 
 import numpy as np
 from flwr.app import ArrayRecord, Context, Message, MetricRecord, RecordDict
@@ -23,7 +22,6 @@ from .dataset_pilot import (
 )
 from .ensemble_strategy import arrayrecord_to_bytes, bytes_to_arrayrecord, decode_ensemble_payload
 from .pilot import _client_id_from_context
-from .project import default_paths
 
 app = ClientApp()
 
@@ -97,8 +95,6 @@ def _dataset_train(msg: Message, context: Context) -> Message:
         content = RecordDict({"arrays": bytes_to_arrayrecord(_serialize_model(model)), "metrics": metrics})
         return Message(content=content, reply_to=msg)
     if selected_baseline == "tabpfn":
-        default_paths().tabpfn_cache.mkdir(parents=True, exist_ok=True)
-        os.environ.setdefault("TABPFN_MODEL_CACHE_DIR", str(default_paths().tabpfn_cache))
         model = _create_tabpfn_model()
         model.fit(partition.x_train, partition.y_train)
         probabilities = model.predict_proba(partition.x_train)

@@ -42,10 +42,5 @@ class ProjectPaths:
     def matplotlib_cache(self) -> Path:
         return self.cache / "matplotlib"
 
-    @property
-    def tabpfn_cache(self) -> Path:
-        return self.cache / "tabpfn"
-
-
 def default_paths() -> ProjectPaths:
     return ProjectPaths(root=Path(__file__).resolve().parents[2])
