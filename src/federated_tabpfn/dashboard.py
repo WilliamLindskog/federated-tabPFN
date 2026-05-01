@@ -68,6 +68,45 @@ def _progress_payload() -> dict[str, Any]:
         for row in reversed(recent_rows)
         if row.get("runtime_seconds") is not None
     ]
+    memory_points = [
+        {
+            "label": row["run_name"],
+            "value": row["max_rss_bytes"] / (1024 * 1024),
+            "baseline": row["baseline"],
+        }
+        for row in reversed(recent_rows)
+        if row.get("max_rss_bytes") is not None
+    ]
+    resource_by_baseline: dict[str, dict[str, float]] = defaultdict(
+        lambda: {
+            "count": 0,
+            "avg_runtime_seconds": 0.0,
+            "avg_max_rss_mb": 0.0,
+            "avg_model_parameter_mb": 0.0,
+            "avg_estimated_comm_mb": 0.0,
+        }
+    )
+    all_rows = recent_result_rows(limit=None)
+    for row in all_rows:
+        baseline = str(row.get("baseline"))
+        bucket = resource_by_baseline[baseline]
+        bucket["count"] += 1
+        if row.get("runtime_seconds") is not None:
+            bucket["avg_runtime_seconds"] += float(row["runtime_seconds"])
+        if row.get("max_rss_bytes") is not None:
+            bucket["avg_max_rss_mb"] += float(row["max_rss_bytes"]) / (1024 * 1024)
+        if row.get("model_parameter_bytes") is not None:
+            bucket["avg_model_parameter_mb"] += float(row["model_parameter_bytes"]) / (1024 * 1024)
+        if row.get("estimated_upstream_bytes") is not None and row.get("estimated_downstream_bytes") is not None:
+            bucket["avg_estimated_comm_mb"] += (
+                float(row["estimated_upstream_bytes"]) + float(row["estimated_downstream_bytes"])
+            ) / (1024 * 1024)
+    for bucket in resource_by_baseline.values():
+        count = max(int(bucket["count"]), 1)
+        bucket["avg_runtime_seconds"] /= count
+        bucket["avg_max_rss_mb"] /= count
+        bucket["avg_model_parameter_mb"] /= count
+        bucket["avg_estimated_comm_mb"] /= count
 
     return {
         "overall": {"completed": completed, "total": total, "remaining": remaining},
@@ -77,6 +116,8 @@ def _progress_payload() -> dict[str, Any]:
         "split_counts": split_counts,
         "accuracy_points": accuracy_points,
         "runtime_points": runtime_points,
+        "memory_points": memory_points,
+        "resource_by_baseline": resource_by_baseline,
     }
 
 
@@ -339,7 +380,15 @@ def render_dashboard_html() -> str:
             <h3>Recent Runtime</h3>
             <svg id="runtime-chart" viewBox="0 0 520 220" preserveAspectRatio="none"></svg>
           </div>
+          <div class="chart-card">
+            <h3>Recent Peak Memory</h3>
+            <svg id="memory-chart" viewBox="0 0 520 220" preserveAspectRatio="none"></svg>
+          </div>
           <div class="chart-legend" id="chart-legend"></div>
+        </article>
+        <article class="panel">
+          <h2>Resource Snapshot</h2>
+          <ul class="list" id="resource-list"></ul>
         </article>
         <article class="panel">
           <h2>Latest Summary</h2>
@@ -567,6 +616,7 @@ def render_dashboard_html() -> str:
 
     buildLineChart('accuracy-chart', progress.accuracy_points || [], (value) => value.toFixed(2));
     buildLineChart('runtime-chart', progress.runtime_points || [], (value) => `${{value.toFixed(1)}}s`);
+    buildLineChart('memory-chart', progress.memory_points || [], (value) => `${{value.toFixed(0)}} MB`);
 
     const legend = document.getElementById('chart-legend');
     Object.entries(palette).forEach(([baseline, color]) => {{
@@ -575,6 +625,25 @@ def render_dashboard_html() -> str:
       item.innerHTML = `<span class="legend-dot" style="background:${{color}}"></span>${{baseline}}`;
       legend.appendChild(item);
     }});
+
+    const resourceList = document.getElementById('resource-list');
+    Object.entries(progress.resource_by_baseline || {{}}).sort().forEach(([baseline, info]) => {{
+      const item = document.createElement('li');
+      item.innerHTML = `
+        <strong>${{baseline}}</strong>
+        <div class="kv"><span>avg runtime</span><span>${{info.avg_runtime_seconds.toFixed(2)}}s</span></div>
+        <div class="kv"><span>avg peak RSS</span><span>${{info.avg_max_rss_mb.toFixed(0)}} MB</span></div>
+        <div class="kv"><span>avg model size</span><span>${{info.avg_model_parameter_mb.toFixed(2)}} MB</span></div>
+        <div class="kv"><span>avg est. comm</span><span>${{info.avg_estimated_comm_mb.toFixed(2)}} MB</span></div>
+      `;
+      resourceList.appendChild(item);
+    }});
+    if (!resourceList.children.length) {{
+      const item = document.createElement('li');
+      item.className = 'empty';
+      item.textContent = 'No resource summaries yet.';
+      resourceList.appendChild(item);
+    }}
 
     document.getElementById('status-json').textContent = JSON.stringify(status, null, 2);
     document.getElementById('progress-json').textContent = JSON.stringify(progress, null, 2);

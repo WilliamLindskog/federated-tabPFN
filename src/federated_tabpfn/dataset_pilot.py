@@ -136,6 +136,113 @@ def _iid_partition_indices(num_rows: int, num_clients: int, seed: int = 42) -> l
     return [partition.astype(np.int64) for partition in np.array_split(indices, num_clients)]
 
 
+def _rebalance_partition_indices(
+    partitions: list[list[int]],
+    *,
+    min_size: int,
+) -> list[np.ndarray]:
+    partitions = [list(partition) for partition in partitions]
+    while True:
+        sizes = [len(partition) for partition in partitions]
+        smallest = int(np.argmin(sizes))
+        largest = int(np.argmax(sizes))
+        if sizes[smallest] >= min_size or sizes[largest] <= min_size:
+            break
+        partitions[smallest].append(partitions[largest].pop())
+    return [np.asarray(partition, dtype=np.int64) for partition in partitions]
+
+
+def _label_skew_partition_indices(
+    y: np.ndarray,
+    num_clients: int,
+    *,
+    alpha: float = 1.5,
+    min_size: int = 8,
+    seed: int = 42,
+) -> list[np.ndarray]:
+    rng = np.random.default_rng(seed)
+    unique_labels = np.unique(y)
+    for _ in range(128):
+        partitions: list[list[int]] = [[] for _ in range(num_clients)]
+        for label in unique_labels:
+            label_indices = np.flatnonzero(y == label)
+            rng.shuffle(label_indices)
+            proportions = rng.dirichlet(np.full(num_clients, alpha))
+            expected = proportions * len(label_indices)
+            counts = np.floor(expected).astype(int)
+            remainder = len(label_indices) - int(counts.sum())
+            if remainder > 0:
+                fractional_order = np.argsort(-(expected - counts))
+                for client_id in fractional_order[:remainder]:
+                    counts[int(client_id)] += 1
+            start = 0
+            for client_id, count in enumerate(counts):
+                end = start + int(count)
+                partitions[client_id].extend(label_indices[start:end].tolist())
+                start = end
+        if all(len(partition) >= min_size for partition in partitions):
+            return [np.asarray(partition, dtype=np.int64) for partition in partitions]
+
+    fallback = _iid_partition_indices(len(y), num_clients, seed=seed)
+    return _rebalance_partition_indices([partition.tolist() for partition in fallback], min_size=min_size)
+
+
+def _quantity_skew_partition_indices(
+    num_rows: int,
+    num_clients: int,
+    *,
+    min_size: int = 8,
+    seed: int = 42,
+) -> list[np.ndarray]:
+    indices = np.arange(num_rows)
+    rng = np.random.default_rng(seed)
+    rng.shuffle(indices)
+    weights = np.arange(1, num_clients + 1, dtype=np.float64)
+    weights /= weights.sum()
+    expected = weights * num_rows
+    counts = np.floor(expected).astype(int)
+    remainder = num_rows - int(counts.sum())
+    if remainder > 0:
+        fractional_order = np.argsort(-(expected - counts))
+        for client_id in fractional_order[:remainder]:
+            counts[int(client_id)] += 1
+    partitions: list[list[int]] = []
+    start = 0
+    for count in counts:
+        end = start + int(count)
+        partitions.append(indices[start:end].tolist())
+        start = end
+    return _rebalance_partition_indices(partitions, min_size=min_size)
+
+
+def _feature_skew_feature_masks(
+    n_features: int,
+    num_clients: int,
+    *,
+    seed: int = 42,
+) -> list[np.ndarray]:
+    rng = np.random.default_rng(seed)
+    feature_order = rng.permutation(n_features)
+    shared_count = max(1, int(np.ceil(0.3 * n_features)))
+    shared_features = feature_order[:shared_count]
+    remaining = feature_order[shared_count:]
+    private_chunks = np.array_split(remaining, num_clients)
+    masks: list[np.ndarray] = []
+    for client_id, chunk in enumerate(private_chunks):
+        allowed = np.unique(np.concatenate([shared_features, np.asarray(chunk, dtype=np.int64)])).astype(np.int64)
+        if len(allowed) < max(1, int(np.ceil(0.5 * n_features))):
+            next_chunk = np.asarray(private_chunks[(client_id + 1) % num_clients], dtype=np.int64)
+            allowed = np.unique(np.concatenate([allowed, next_chunk])).astype(np.int64)
+        masks.append(allowed)
+    return masks
+
+
+def _apply_feature_mask(x: np.ndarray, allowed_features: np.ndarray, fill_values: np.ndarray) -> np.ndarray:
+    masked = np.tile(fill_values, (len(x), 1))
+    masked[:, allowed_features] = x[:, allowed_features]
+    return np.asarray(masked, dtype=np.float64)
+
+
 def _preprocess_adult(features: pd.DataFrame) -> np.ndarray:
     transformer = _fit_adult_preprocessor(features)
     transformed = transformer.transform(features)
@@ -247,10 +354,6 @@ def _dataset_state(
 ) -> DatasetState:
     normalized_dataset = _normalize_selected_dataset(selected_dataset)
     if normalized_dataset == "openml":
-        if selected_split_regime != "iid":
-            raise ValueError(
-                f"OpenML paper-track execution currently supports only 'iid', got '{selected_split_regime}'."
-            )
         frame = _load_openml_frame(selected_dataset)
         if max_rows > 0 and len(frame) > max_rows:
             frame = frame.sample(n=max_rows, random_state=42).reset_index(drop=True)
@@ -261,11 +364,41 @@ def _dataset_state(
             .apply(pd.to_numeric, errors="raise")
             .to_numpy(dtype=np.float64, copy=True)
         )
-        index_partitions = _iid_partition_indices(len(frame), num_clients)
-        partitions = [
-            _numeric_frame_to_client_partition(x[index_partition], y[index_partition], seed=42 + partition_id)
-            for partition_id, index_partition in enumerate(index_partitions)
-        ]
+        if selected_split_regime == "iid":
+            index_partitions = _iid_partition_indices(len(frame), num_clients)
+            partitions = [
+                _numeric_frame_to_client_partition(x[index_partition], y[index_partition], seed=42 + partition_id)
+                for partition_id, index_partition in enumerate(index_partitions)
+            ]
+        elif selected_split_regime == "label_skew":
+            index_partitions = _label_skew_partition_indices(y, num_clients, seed=42)
+            partitions = [
+                _numeric_frame_to_client_partition(x[index_partition], y[index_partition], seed=42 + partition_id)
+                for partition_id, index_partition in enumerate(index_partitions)
+            ]
+        elif selected_split_regime == "quantity_skew":
+            index_partitions = _quantity_skew_partition_indices(len(frame), num_clients, seed=42)
+            partitions = [
+                _numeric_frame_to_client_partition(x[index_partition], y[index_partition], seed=42 + partition_id)
+                for partition_id, index_partition in enumerate(index_partitions)
+            ]
+        elif selected_split_regime == "feature_skew":
+            index_partitions = _iid_partition_indices(len(frame), num_clients, seed=42)
+            fill_values = np.mean(x, axis=0)
+            feature_masks = _feature_skew_feature_masks(x.shape[1], num_clients, seed=42)
+            partitions = [
+                _numeric_frame_to_client_partition(
+                    _apply_feature_mask(x[index_partition], feature_masks[partition_id], fill_values),
+                    y[index_partition],
+                    seed=42 + partition_id,
+                )
+                for partition_id, index_partition in enumerate(index_partitions)
+            ]
+        else:
+            raise ValueError(
+                "OpenML paper-track execution currently supports split regimes "
+                f"'iid', 'label_skew', 'quantity_skew', and 'feature_skew', got '{selected_split_regime}'."
+            )
         return DatasetState(
             partitions=partitions,
             n_features=partitions[0].x_train.shape[1],

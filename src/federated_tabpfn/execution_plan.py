@@ -6,7 +6,15 @@ from typing import Any
 from .results_summary import recent_result_rows
 from .study_registry import dataset_key, dataset_slug, paper_cc18_datasets
 
-SUPPORTED_PHASES = ("engineering", "iid-core", "overall")
+SUPPORTED_PHASES = (
+    "engineering",
+    "iid-core",
+    "noniid-label-core",
+    "noniid-quantity-core",
+    "noniid-feature-core",
+    "noniid-core",
+    "overall",
+)
 
 
 @dataclass(frozen=True)
@@ -44,6 +52,25 @@ def completed_run_keys() -> set[tuple[str, str, str]]:
     }
 
 
+def _paper_core_baselines(config: dict[str, Any]) -> list[str]:
+    study_plan = dict(config.get("study_plan", {}))
+    return [str(b) for b in study_plan.get("primary_core_baselines", [])]
+
+
+def _paper_track_specs(config: dict[str, Any], split_regime: str) -> list[RunSpec]:
+    baselines = _paper_core_baselines(config)
+    return [
+        RunSpec(
+            dataset=dataset_key(dataset),
+            baseline=baseline,
+            split_regime=split_regime,
+            run_name=f"paper-{dataset.data_id}-{dataset_slug(dataset)}-{baseline_run_slug(baseline)}-{split_regime.replace('_', '-')}",
+        )
+        for dataset in paper_cc18_datasets()
+        for baseline in baselines
+    ]
+
+
 def phase_specs(config: dict[str, Any], phase: str) -> list[RunSpec]:
     if phase == "engineering":
         dataset = "adult_engineering_slice"
@@ -63,18 +90,35 @@ def phase_specs(config: dict[str, Any], phase: str) -> list[RunSpec]:
         ]
 
     if phase == "iid-core":
+        return _paper_track_specs(config, "iid")
+
+    if phase == "noniid-label-core":
+        return _paper_track_specs(config, "label_skew")
+
+    if phase == "noniid-quantity-core":
+        return _paper_track_specs(config, "quantity_skew")
+
+    if phase == "noniid-feature-core":
+        return _paper_track_specs(config, "feature_skew")
+
+    if phase == "noniid-core":
         study_plan = dict(config.get("study_plan", {}))
-        baselines = [str(b) for b in study_plan.get("primary_core_baselines", [])]
-        return [
-            RunSpec(
-                dataset=dataset_key(dataset),
-                baseline=baseline,
-                split_regime="iid",
-                run_name=f"paper-{dataset.data_id}-{dataset_slug(dataset)}-{baseline_run_slug(baseline)}-iid",
+        order = [
+            str(item)
+            for item in study_plan.get(
+                "preferred_non_iid_order",
+                ["label_skew", "quantity_skew", "feature_skew"],
             )
-            for dataset in paper_cc18_datasets()
-            for baseline in baselines
         ]
+        specs: list[RunSpec] = []
+        for split_regime in order:
+            if split_regime not in {"label_skew", "quantity_skew", "feature_skew"}:
+                raise ValueError(
+                    f"Unsupported non-IID split '{split_regime}' in preferred_non_iid_order. "
+                    "Expected only 'label_skew', 'quantity_skew', and/or 'feature_skew'."
+                )
+            specs.extend(_paper_track_specs(config, split_regime))
+        return specs
 
     if phase == "overall":
         return phase_specs(config, "engineering") + phase_specs(config, "iid-core")

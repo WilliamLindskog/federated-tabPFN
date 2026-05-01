@@ -35,6 +35,11 @@ study_plan:
     - random_forest
     - xgboost
     - tabpfn
+  non_iid_extension_scope: paper_track_core
+  preferred_non_iid_order:
+    - label_skew
+    - quantity_skew
+    - feature_skew
   optional_foundation_model_comparators:
     - tabh2o
   secondary_baselines:
