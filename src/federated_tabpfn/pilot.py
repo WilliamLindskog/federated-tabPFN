@@ -112,7 +112,7 @@ def _run_flower_app(*, run_config: dict[str, str | int], num_supernodes: int) ->
                     'version = "0.0.0"',
                     'description = "Temporary Flower app wrapper for local federated-tabPFN runs"',
                     'license = { file = "LICENSE" }',
-                    'dependencies = ["flwr[simulation]>=1.29,<1.30"]',
+                    'dependencies = ["flwr[simulation]>=1.29,<1.30", "tabpfn-client>=0.2.8"]',
                     "",
                     "[tool.flwr.app]",
                     'publisher = "local"',
@@ -162,7 +162,7 @@ def _run_flower_app(*, run_config: dict[str, str | int], num_supernodes: int) ->
         )
 
 
-def _wait_for_fresh_artifact(artifact_path: Path, *, started_at: float, timeout_seconds: float = 180.0) -> Path:
+def _wait_for_fresh_artifact(artifact_path: Path, *, started_at: float, timeout_seconds: float = 420.0) -> Path:
     deadline = time.time() + timeout_seconds
     while time.time() <= deadline:
         if artifact_path.exists() and artifact_path.stat().st_mtime >= started_at:

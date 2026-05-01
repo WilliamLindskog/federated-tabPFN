@@ -9,8 +9,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from tabpfn_client import set_access_token as set_tabpfn_access_token
-from tabpfn_client.estimator import TabPFNClassifier
 import xgboost as xgb
 from flwr.app import ArrayRecord, Context, Message, MetricRecord, RecordDict
 from flwr.clientapp import ClientApp
@@ -382,7 +380,10 @@ def _create_random_forest_model() -> RandomForestClassifier:
     )
 
 
-def _create_tabpfn_model() -> TabPFNClassifier:
+def _create_tabpfn_model() -> Any:
+    from tabpfn_client import set_access_token as set_tabpfn_access_token
+    from tabpfn_client.estimator import TabPFNClassifier
+
     token = os.environ.get("TABPFN_TOKEN")
     if token:
         set_tabpfn_access_token(token)
